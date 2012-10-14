@@ -5,7 +5,7 @@ AM_CPPFLAGS = \
 	-DSEVERITY=LOG_INFO \
 	-DINET6 \
 	-DRPCBIND_STATEDIR="\"$(statedir)\"" \
-	-DRPCUSER="\"$(rpcuser)\"" \
+	-DRPCBIND_USER="\"$(rpcuser)\"" \
 	-D_GNU_SOURCE \
 	$(TIRPC_CFLAGS)
 
