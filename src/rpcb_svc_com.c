@@ -1227,6 +1227,8 @@ send_svcsyserr(SVCXPRT *xprt, struct finfo *fi)
 	return;
 }
 
+extern SVCAUTH svc_auth_none;
+
 static void
 handle_reply(int fd, SVCXPRT *xprt)
 {
@@ -1293,7 +1295,10 @@ handle_reply(int fd, SVCXPRT *xprt)
 	a.rmt_localvers = fi->versnum;
 
 	xprt_set_caller(xprt, fi);
+	xprt->xp_auth = &svc_auth_none;
 	svc_sendreply(xprt, (xdrproc_t) xdr_rmtcall_result, (char *) &a);
+	SVCAUTH_DESTROY(xprt->xp_auth);
+	xprt->xp_auth = NULL;
 done:
 	if (buffer)
 		free(buffer);
