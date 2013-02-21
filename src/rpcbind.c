@@ -67,7 +67,11 @@
 #include <pwd.h>
 #include <string.h>
 #include <errno.h>
+#ifdef HAVE_NSS_H
 #include <nss.h>
+#else
+static inline void __nss_configure_lookup(const char *db, const char *s) {}
+#endif
 #include "rpcbind.h"
 
 /*#define RPCBIND_DEBUG*/
