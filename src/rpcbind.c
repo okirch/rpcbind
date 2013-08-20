@@ -56,6 +56,9 @@
 #include <netinet/in.h>
 #endif
 #include <arpa/inet.h>
+#ifdef SYSTEMD
+#include <systemd/sd-daemon.h>
+#endif
 #include <fcntl.h>
 #include <netdb.h>
 #include <stdio.h>
@@ -100,6 +103,9 @@ int runasdaemon = 0;
 int insecure = 0;
 int oldstyle_local = 0;
 int verboselog = 0;
+#ifdef SYSTEMD
+int systemd_activation = 0;
+#endif
 
 char **hosts = NULL;
 int nhosts = 0;
@@ -123,6 +129,10 @@ static char superuser[] = "superuser";
 
 int main __P((int, char *[]));
 
+static void init_transports_daemon __P((void));
+#ifdef SYSTEMD
+static void init_transports_systemd __P((void));
+#endif
 static int init_transport __P((struct netconfig *));
 static void rbllist_add __P((rpcprog_t, rpcvers_t, struct netconfig *,
 			     struct netbuf *));
@@ -132,10 +142,14 @@ static void parseargs __P((int, char *[]));
 int
 main(int argc, char *argv[])
 {
-	struct netconfig *nconf;
-	void *nc_handle;	/* Net config handle */
 	struct rlimit rl;
 	int maxrec = RPC_MAXDATASIZE;
+
+#ifdef SYSTEMD
+	/* See whether we've been activated by systemd */
+	if (sd_listen_fds(0) > 0)
+		systemd_activation = 1;
+#endif
 
 	parseargs(argc, argv);
 
@@ -167,29 +181,14 @@ main(int argc, char *argv[])
 	 */
 	__nss_configure_lookup("services", "files");
 
-	nc_handle = setnetconfig(); 	/* open netconfig file */
-	if (nc_handle == NULL) {
-		syslog(LOG_ERR, "could not read /etc/netconfig");
-		exit(1);
-	}
-
-	nconf = getnetconfigent("local");
-	if (nconf == NULL)
-		nconf = getnetconfigent("unix");
-	if (nconf == NULL) {
-		syslog(LOG_ERR, "%s: can't find local transport\n", argv[0]);
-		exit(1);
-	}
-	
 	rpc_control(RPC_SVC_CONNMAXREC_SET, &maxrec);
 
-	init_transport(nconf);
-
-	while ((nconf = getnetconfig(nc_handle))) {
-		if (nconf->nc_flag & NC_VISIBLE)
-			init_transport(nconf);
-	}
-	endnetconfig(nc_handle);
+#ifdef SYSTEMD
+	if (systemd_activation)
+		init_transports_systemd();
+	else
+#endif
+		init_transports_daemon();
 
 #ifdef PORTMAP
 	if (!udptrans)
@@ -571,17 +570,29 @@ rpcbind_register_transport(struct netconfig *nconf, SVCXPRT *xprt, struct netbuf
  * <0: error - ignore this netid
  */
 static int
-rpcbind_init_endpoint(struct netconfig *nconf, const char *hostname)
+rpcbind_init_endpoint(struct netconfig *nconf, const char *hostname, int fd)
 {
 	struct t_bind taddr;
 	SVCXPRT	*my_xprt = NULL;
-	int r, fd = -1;
+	int r;
 
 	memset(&taddr, 0, sizeof(taddr));
 
-	r = create_transport_socket(nconf, hostname, &taddr.addr, &fd);
-	if (r <= 0)
-		return r;
+	if (fd < 0) {
+		r = create_transport_socket(nconf, hostname, &taddr.addr, &fd);
+		if (r <= 0)
+			return r;
+	} else {
+		struct sockaddr_storage addr;
+		socklen_t alen = sizeof(addr);
+
+		if (getsockname(fd, (struct sockaddr *) &addr, &alen) < 0) {
+			syslog(LOG_ERR, "cannot get address for socket fd %d", fd);
+			exit(1);
+		}
+
+		sockaddr2netbuf((struct sockaddr *) &addr, alen, &taddr.addr);
+	}
 
 	my_xprt = (SVCXPRT *)svc_tli_create(fd, nconf, &taddr, RPC_MAXDATASIZE, RPC_MAXDATASIZE);
 	if (my_xprt == (SVCXPRT *)NULL) {
@@ -645,12 +656,12 @@ init_transport(struct netconfig *nconf)
 		/* Ensure that we always bind to loopback */
 		switch (si.si_af) {
 		case AF_INET:
-			if (rpcbind_init_endpoint(nconf, "127.0.0.1") > 0)
+			if (rpcbind_init_endpoint(nconf, "127.0.0.1", -1) > 0)
 				numbound++;
 			break;
 
 		case AF_INET6:
-			if (rpcbind_init_endpoint(nconf, "::1") > 0)
+			if (rpcbind_init_endpoint(nconf, "::1", -1) > 0)
 				numbound++;
 			break;
 		}
@@ -662,7 +673,7 @@ init_transport(struct netconfig *nconf)
 			if (strcmp("*", hostname) == 0)
 				hostname = NULL;
 
-			r = rpcbind_init_endpoint(nconf, hostname);
+			r = rpcbind_init_endpoint(nconf, hostname, -1);
 			if (r < 0)
 				return 1;
 			if (r > 0)
@@ -672,7 +683,7 @@ init_transport(struct netconfig *nconf)
 		if (numbound == 0)
 			return 1;
 	} else {
-		if (rpcbind_init_endpoint(nconf, NULL) <= 0)
+		if (rpcbind_init_endpoint(nconf, NULL, -1) <= 0)
 			return 1;
 	}
 
@@ -697,6 +708,103 @@ init_transport(struct netconfig *nconf)
 	}
 	return (0);
 }
+
+static void
+init_transports_daemon(void)
+{
+	void *nc_handle;
+	struct netconfig *nconf;
+
+	nc_handle = setnetconfig(); 	/* open netconfig file */
+	if (nc_handle == NULL) {
+		syslog(LOG_ERR, "could not read /etc/netconfig");
+		exit(1);
+	}
+
+	nconf = getnetconfigent("local");
+	if (nconf == NULL)
+		nconf = getnetconfigent("unix");
+	if (nconf == NULL) {
+		syslog(LOG_ERR, "rpcbind: can't find local transport\n");
+		exit(1);
+	}
+
+	init_transport(nconf);
+
+	while ((nconf = getnetconfig(nc_handle))) {
+		if (nconf->nc_flag & NC_VISIBLE)
+			init_transport(nconf);
+	}
+	endnetconfig(nc_handle);
+}
+
+#ifdef SYSTEMD
+static struct netconfig *
+sockinfo2nconf(void **handlep, const struct __rpc_sockinfo *match)
+{
+	struct netconfig *nconf;
+
+	if (*handlep)
+		endnetconfig(*handlep);
+	*handlep = setnetconfig();
+
+	while ((nconf = getnetconfig(*handlep))) {
+		struct __rpc_sockinfo si;
+
+		if (!__rpc_nconf2sockinfo(nconf, &si))
+			continue;
+
+		if (si.si_af == match->si_af
+		 && si.si_socktype == match->si_socktype
+		 && si.si_proto == match->si_proto)
+			return nconf;
+	}
+	return NULL;
+}
+
+static void
+init_transports_systemd()
+{
+	void *nc_handle = NULL;
+	int nfds, n;
+
+	if ((nfds = sd_listen_fds(0)) < 0) {
+		syslog(LOG_ERR, "failed to acquire systemd sockets: %s", strerror(-nfds));
+		exit(1);
+	}
+	if (nfds >= 16) {
+		syslog(LOG_ERR, "too many sockets passed by systemd (%u)", nfds);
+		exit(1);
+	}
+
+	for (n = 0; n < nfds; ++n) {
+		struct netconfig *nconf;
+		struct __rpc_sockinfo si;
+		int fd;
+
+		fd = SD_LISTEN_FDS_START + n;
+
+		if (!__rpc_fd2sockinfo(fd, &si)) {
+			syslog(LOG_ERR, "cannot get socket information for fd %d", fd);
+			exit(1);
+		}
+
+		/* Now find the netconfig entry matching this transport */
+		if ((nconf = sockinfo2nconf(&nc_handle, &si)) == NULL) {
+			syslog(LOG_ERR, "not netconfig for socket fd %d", fd);
+			exit(1);
+		}
+
+		if (rpcbind_init_endpoint(nconf, NULL, fd) <= 0) {
+			syslog(LOG_ERR, "unable to create transport for socket fd %d", fd);
+			exit(1);
+		}
+	}
+
+	if (nc_handle)
+		endnetconfig(nc_handle);
+}
+#endif
 
 static void
 rbllist_add(rpcprog_t prog, rpcvers_t vers, struct netconfig *nconf,
