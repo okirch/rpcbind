@@ -65,6 +65,7 @@
 #include <syslog.h>
 #include <err.h>
 #include <pwd.h>
+#include <grp.h>
 #include <string.h>
 #include <errno.h>
 #ifdef HAVE_NSS_H
