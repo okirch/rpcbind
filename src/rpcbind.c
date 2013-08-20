@@ -365,11 +365,13 @@ init_transport(struct netconfig *nconf)
 				    nconf->nc_netid);
 				return (1);
 			}
+
+			hints.ai_flags &= ~AI_NUMERICHOST;
 			switch (hints.ai_family) {
 			case AF_INET:
 				if (inet_pton(AF_INET, hosts[nhostsbak],
 				    host_addr) == 1) {
-					hints.ai_flags &= AI_NUMERICHOST;
+					hints.ai_flags |= AI_NUMERICHOST;
 				} else {
 					/*
 					 * Skip if we have an AF_INET6 adress.
@@ -382,7 +384,7 @@ init_transport(struct netconfig *nconf)
 			case AF_INET6:
 				if (inet_pton(AF_INET6, hosts[nhostsbak],
 				    host_addr) == 1) {
-					hints.ai_flags &= AI_NUMERICHOST;
+					hints.ai_flags |= AI_NUMERICHOST;
 				} else {
 					/*
 					 * Skip if we have an AF_INET adress.
