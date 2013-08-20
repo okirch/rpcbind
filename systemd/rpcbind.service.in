@@ -2,6 +2,7 @@
 Description=RPC Bind
 
 [Service]
+Type=notify
 ExecStart=@bindir@/rpcbind -w -f
 
 [Install]
