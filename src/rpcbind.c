@@ -562,6 +562,43 @@ rpcbind_register_transport(struct netconfig *nconf, SVCXPRT *xprt, struct netbuf
 }
 
 /*
+ * This will create a server socket for the given netid, bound to the
+ * address specified by @hostname
+ *
+ * Return value:
+ *  1: success
+ *  0: error - ignore this hostname
+ * <0: error - ignore this netid
+ */
+static int
+rpcbind_init_endpoint(struct netconfig *nconf, const char *hostname)
+{
+	struct t_bind taddr;
+	SVCXPRT	*my_xprt = NULL;
+	int r, fd = -1;
+
+	memset(&taddr, 0, sizeof(taddr));
+
+	r = create_transport_socket(nconf, hostname, &taddr.addr, &fd);
+	if (r <= 0)
+		return r;
+
+	my_xprt = (SVCXPRT *)svc_tli_create(fd, nconf, &taddr, RPC_MAXDATASIZE, RPC_MAXDATASIZE);
+	if (my_xprt == (SVCXPRT *)NULL) {
+		syslog(LOG_ERR, "%s: could not create service", nconf->nc_netid);
+		close(fd);
+		return 0;
+	}
+
+	if (!rpcbind_register_transport(nconf, my_xprt, &taddr.addr)) {
+		svc_destroy(my_xprt);
+		return 0;
+	}
+
+	return 1;
+}
+
+/*
  * Adds the entry into the rpcbind database.
  * If PORTMAP, then for UDP and TCP, it adds the entries for version 2 also
  * Returns 0 if succeeds, else fails
@@ -569,10 +606,7 @@ rpcbind_register_transport(struct netconfig *nconf, SVCXPRT *xprt, struct netbuf
 static int
 init_transport(struct netconfig *nconf)
 {
-	int fd = -1;
-	struct t_bind taddr;
 	struct __rpc_sockinfo si;
-	SVCXPRT	*my_xprt = NULL;
 	int status;	/* bound checking ? */
 
 	if ((nconf->nc_semantics != NC_TPI_CLTS) &&
@@ -635,41 +669,18 @@ init_transport(struct netconfig *nconf)
 			if (strcmp("*", hosts[nhostsbak]) == 0)
 				hosts[nhostsbak] = NULL;
 
-			memset(&taddr, 0, sizeof(taddr));
-
-			r = create_transport_socket(nconf, hosts[nhostsbak], &taddr.addr, &fd);
+			r = rpcbind_init_endpoint(nconf, hosts[nhostsbak]);
 			if (r < 0)
-				goto error;
-			if (r == 0)
-				continue;
-
-			my_xprt = (SVCXPRT *)svc_tli_create(fd, nconf, &taddr, 
-                                RPC_MAXDATASIZE, RPC_MAXDATASIZE);
-			if (my_xprt == (SVCXPRT *)NULL) {
-				syslog(LOG_ERR, "%s: could not create service", 
-                                        nconf->nc_netid);
-				goto error;
-			}
-			checkbind = 1;
-			fd = -1;
+				return 1;
+			if (r > 0)
+				checkbind = 1;
 		}
 		if (!checkbind)
 			return 1;
 	} else {	/* NC_TPI_COTS */
-		memset(&taddr, 0, sizeof(taddr));
-		if (create_transport_socket(nconf, NULL, &taddr.addr, &fd) <= 0)
-			goto error;
-
-		my_xprt = (SVCXPRT *)svc_tli_create(fd, nconf, &taddr, RPC_MAXDATASIZE, RPC_MAXDATASIZE);
-		if (my_xprt == (SVCXPRT *)NULL) {
-			syslog(LOG_ERR, "%s: could not create service",
-					nconf->nc_netid);
-			goto error;
-		}
+		if (rpcbind_init_endpoint(nconf, NULL) <= 0)
+			return 1;
 	}
-
-	if (!rpcbind_register_transport(nconf, my_xprt, &taddr.addr))
-		return (1);
 
 	/*
 	 * rmtcall only supported on CLTS transports for now.
@@ -691,10 +702,6 @@ init_transport(struct netconfig *nconf)
 #endif
 	}
 	return (0);
-error:
-	if (fd >= 0)
-		close(fd);
-	return (1);
 }
 
 static void
