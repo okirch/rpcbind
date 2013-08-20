@@ -260,7 +260,10 @@ main(int argc, char *argv[])
 #endif
 
 	network_init();
-
+#ifdef SYSTEMD
+	if (systemd_activation)
+		sd_notify(0, "READY=1");
+#endif
 	my_svc_run();
 	rpcbind_log_error("svc_run returned unexpectedly");
 	rpcbind_abort();
