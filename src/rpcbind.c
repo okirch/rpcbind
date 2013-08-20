@@ -268,6 +268,186 @@ main(int argc, char *argv[])
 }
 
 /*
+ * Helper function - maybe this should go elsewhere
+ */
+static void
+sockaddr2netbuf(const struct sockaddr *sa, socklen_t alen, struct netbuf *abuf)
+{
+	abuf->len = abuf->maxlen = alen;
+	abuf->buf = malloc(alen);
+
+	if (abuf->buf == NULL) {
+		syslog(LOG_ERR, "not enough memory for address buffer (%u bytes)", alen);
+		exit(1);
+	}
+
+	memcpy(abuf->buf, sa, alen);
+}
+
+/*
+ * Perform hostname lookup
+ */
+static int
+do_hostname_lookup(struct netconfig *nconf, const char *hostname, struct netbuf *abuf)
+{
+	struct addrinfo hints, *res = NULL;
+	struct __rpc_sockinfo si;
+	int aicode;
+
+	if (!__rpc_nconf2sockinfo(nconf, &si)) {
+		syslog(LOG_ERR, "cannot get sockinfo for %s", nconf->nc_netid);
+		return -1;
+	}
+
+	memset(&hints, 0, sizeof hints);
+	hints.ai_flags = AI_PASSIVE;
+	hints.ai_family = si.si_af;
+	hints.ai_socktype = si.si_socktype;
+	hints.ai_protocol = si.si_proto;
+
+	if (hostname == NULL) {
+		/*
+		 * If no hosts were specified, just bind to INADDR_ANY
+		 */
+	} else {
+		u_int32_t host_addr[4];  /* IPv4 or IPv6 */
+
+		switch (hints.ai_family) {
+		case AF_INET:
+			if (inet_pton(AF_INET, hostname, host_addr) == 1)
+				hints.ai_flags |= AI_NUMERICHOST;
+			else if (inet_pton(AF_INET6, hostname, host_addr) == 1)
+				return 0;
+			break;
+
+		case AF_INET6:
+			if (inet_pton(AF_INET6, hostname, host_addr) == 1)
+				hints.ai_flags |= AI_NUMERICHOST;
+			else if (inet_pton(AF_INET, hostname, host_addr) == 1)
+				return 0;
+			break;
+
+		default:
+			break;
+		}
+	}
+
+	if ((aicode = getaddrinfo(hostname, servname, &hints, &res)) != 0) {
+		if ((aicode = getaddrinfo(hostname, "portmapper", &hints, &res)) != 0) {
+			syslog(LOG_ERR,
+			    "cannot get %s address for %s: %s",
+			    nconf->nc_netid,
+			    hostname? hostname : "*",
+			    gai_strerror(aicode));
+			return 0;
+		}
+	}
+
+	/* XXX: should we loop over all addresses returned? */
+	sockaddr2netbuf(res->ai_addr, res->ai_addrlen, abuf);
+	freeaddrinfo(res);
+	return 1;
+}
+
+static void
+build_local_addr(const char *path, struct netbuf *abuf)
+{
+	struct sockaddr_un sun;
+
+	memset(&sun, 0, sizeof sun);
+	sun.sun_family = AF_LOCAL;
+	strcpy(sun.sun_path, path);
+
+	sockaddr2netbuf((struct sockaddr *) &sun, SUN_LEN(&sun), abuf);
+}
+
+/*
+ * Create a bound socket
+ *
+ * Return values:
+ *   -1 means error or problem with this netconfig entry.
+ */
+static int
+create_transport_socket(struct netconfig *nconf, const char *hostname, struct netbuf *abuf, int *fdret)
+{
+	int fd = -1;
+	int r;
+	mode_t oldmask;
+
+	*fdret = -1;
+
+	if (strcmp(nconf->nc_netid, "local") == 0 || strcmp(nconf->nc_netid, "unix") == 0) {
+		unlink(_PATH_RPCBINDSOCK);
+		build_local_addr(_PATH_RPCBINDSOCK, abuf);
+	} else {
+		r = do_hostname_lookup(nconf, hostname, abuf);
+		if (r <= 0)
+			return r;
+	}
+
+	/*
+	 * XXX - using RPC library internal functions.
+	 */
+	if ((fd = __rpc_nconf2fd(nconf)) < 0) {
+		syslog(LOG_ERR, "cannot create socket for %s", nconf->nc_netid);
+		return -1;
+	}
+
+	if (nconf->nc_semantics != NC_TPI_CLTS) {
+		int on = 1;
+
+		/* For connection oriented sockets, always set REUSEADDR.
+		 * This allows us to restart the server even if there are
+		 * TCP sockets loitering around in TIME_WAIT */
+		if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on)) != 0) {
+			syslog(LOG_ERR, "cannot set SO_REUSEADDR on %s", nconf->nc_netid);
+			return -1;
+		}
+	}
+
+	oldmask = umask(S_IXUSR|S_IXGRP|S_IXOTH);
+	if (bind(fd, (struct sockaddr *) abuf->buf, abuf->len) != 0) {
+		syslog(LOG_ERR, "cannot bind %s on %s: %m",
+			hostname? hostname : "*",
+			nconf->nc_netid);
+		(void) umask(oldmask);
+		goto skip;
+	}
+	(void) umask(oldmask);
+
+	if (nconf->nc_semantics != NC_TPI_CLTS) {
+		if (listen(fd, SOMAXCONN) < 0) {
+			syslog(LOG_ERR, "unable to listen on %s socket: %m",
+					nconf->nc_netid);
+			return -1;
+		}
+	}
+
+
+#ifdef RPCBIND_DEBUG
+	if (debugging) {
+		/*
+		 * for debugging print out our universal
+		 * address
+		 */
+		char *uaddr;
+
+		uaddr = taddr2uaddr(nconf, abuf);
+		(void) fprintf(stderr, "rpcbind : my %s address is %s\n", nconf->nc_netid, uaddr);
+		(void) free(uaddr);
+	}
+#endif
+
+	*fdret = fd;
+	return 1;
+
+skip:
+	if (fd >= 0)
+		close(fd);
+	return 0;
+}
+
+/*
  * Adds the entry into the rpcbind database.
  * If PORTMAP, then for UDP and TCP, it adds the entries for version 2 also
  * Returns 0 if succeeds, else fails
@@ -277,20 +457,9 @@ init_transport(struct netconfig *nconf)
 {
 	int fd = -1;
 	struct t_bind taddr;
-	struct addrinfo hints, *res;
 	struct __rpc_sockinfo si;
 	SVCXPRT	*my_xprt = NULL;
 	int status;	/* bound checking ? */
-	int aicode;
-	int addrlen = 0;
-	int nhostsbak;
-	int checkbind;
-	int on = 1;
-	struct sockaddr *sa = NULL;
-	u_int32_t host_addr[4];  /* IPv4 or IPv6 */
-	struct sockaddr_un sun;
-	mode_t oldmask;
-        res = NULL;
 
 	if ((nconf->nc_semantics != NC_TPI_CLTS) &&
 		(nconf->nc_semantics != NC_TPI_COTS) &&
@@ -315,24 +484,10 @@ init_transport(struct netconfig *nconf)
 		return (1);
 	}
 
-	if ((strcmp(nconf->nc_netid, "local") == 0) ||
-	    (strcmp(nconf->nc_netid, "unix") == 0)) {
-		memset(&sun, 0, sizeof sun);
-		sun.sun_family = AF_LOCAL;
-		unlink(_PATH_RPCBINDSOCK);
-		strcpy(sun.sun_path, _PATH_RPCBINDSOCK);
-		addrlen = SUN_LEN(&sun);
-		sa = (struct sockaddr *)&sun;
-	} else {
-		/* Get rpcbind's address on this transport */
-
-		memset(&hints, 0, sizeof hints);
-		hints.ai_flags = AI_PASSIVE;
-		hints.ai_family = si.si_af;
-		hints.ai_socktype = si.si_socktype;
-		hints.ai_protocol = si.si_proto;
-	}
 	if (nconf->nc_semantics == NC_TPI_CLTS) {
+		int nhostsbak;
+		int checkbind;
+
 		/*
 		 * If no hosts were specified, just bind to INADDR_ANY.  Otherwise
 		 * make sure 127.0.0.1 is added to the list.
@@ -343,9 +498,9 @@ init_transport(struct netconfig *nconf)
 		if (nhostsbak == 1)
 			hosts[0] = "*";
 		else {
-			if (hints.ai_family == AF_INET) {
+			if (si.si_af == AF_INET) {
 				hosts[nhostsbak - 1] = "127.0.0.1";
-			} else if (hints.ai_family == AF_INET6) {
+			} else if (si.si_af == AF_INET6) {
 				hosts[nhostsbak - 1] = "::1";
 			} else
 				return 1;
@@ -356,47 +511,9 @@ init_transport(struct netconfig *nconf)
 		*/
 		checkbind = 0;
 		while (nhostsbak > 0) {
-			--nhostsbak;
-			/*
-			 * XXX - using RPC library internal functions.
-			 */
-			if ((fd = __rpc_nconf2fd(nconf)) < 0) {
-				syslog(LOG_ERR, "cannot create socket for %s",
-				    nconf->nc_netid);
-				return (1);
-			}
+			int r;
 
-			hints.ai_flags &= ~AI_NUMERICHOST;
-			switch (hints.ai_family) {
-			case AF_INET:
-				if (inet_pton(AF_INET, hosts[nhostsbak],
-				    host_addr) == 1) {
-					hints.ai_flags |= AI_NUMERICHOST;
-				} else {
-					/*
-					 * Skip if we have an AF_INET6 adress.
-					 */
-					if (inet_pton(AF_INET6,
-					    hosts[nhostsbak], host_addr) == 1)
-						continue;
-				}
-				break;
-			case AF_INET6:
-				if (inet_pton(AF_INET6, hosts[nhostsbak],
-				    host_addr) == 1) {
-					hints.ai_flags |= AI_NUMERICHOST;
-				} else {
-					/*
-					 * Skip if we have an AF_INET adress.
-					 */
-					if (inet_pton(AF_INET, hosts[nhostsbak],
-					    host_addr) == 1)
-						continue;
-				}
-	        		break;
-			default:
-				break;
-			}
+			--nhostsbak;
 
 			/*
 			 * If no hosts were specified, just bind to INADDR_ANY
@@ -404,68 +521,14 @@ init_transport(struct netconfig *nconf)
 			if (strcmp("*", hosts[nhostsbak]) == 0)
 				hosts[nhostsbak] = NULL;
 
-			if ((aicode = getaddrinfo(hosts[nhostsbak],
-			    servname, &hints, &res)) != 0) {
-			  if ((aicode = getaddrinfo(hosts[nhostsbak],
-						    "portmapper", &hints, &res)) != 0) {
-				syslog(LOG_ERR,
-				    "cannot get local address for %s: %s",
-				    nconf->nc_netid, gai_strerror(aicode));
-				continue;
-			  }
-			}
-			addrlen = res->ai_addrlen;
-			sa = (struct sockaddr *)res->ai_addr;
-			oldmask = umask(S_IXUSR|S_IXGRP|S_IXOTH);
-                        if (bind(fd, sa, addrlen) != 0) {
-				syslog(LOG_ERR, "cannot bind %s on %s: %m",
-					(hosts[nhostsbak] == NULL) ? "*" :
-					hosts[nhostsbak], nconf->nc_netid);
-				if (res != NULL)
-					freeaddrinfo(res);
-				continue;
-			} else
-				checkbind++;
-			(void) umask(oldmask);
+			memset(&taddr, 0, sizeof(taddr));
 
-			/* Copy the address */
-			taddr.addr.maxlen = taddr.addr.len = addrlen;
-			taddr.addr.buf = malloc(addrlen);
-			if (taddr.addr.buf == NULL) {
-				syslog(LOG_ERR,
-				    "cannot allocate memory for %s address",
-				    nconf->nc_netid);
-				if (res != NULL)
-					freeaddrinfo(res);
-				return 1;
-			}
-			memcpy(taddr.addr.buf, sa, addrlen);
-#ifdef RPCBIND_DEBUG
-			if (debugging) {
-				/*
-				 * for debugging print out our universal
-				 * address
-				 */
-				char *uaddr;
-				struct netbuf nb;
-				int sa_size = 0;
+			r = create_transport_socket(nconf, hosts[nhostsbak], &taddr.addr, &fd);
+			if (r < 0)
+				goto error;
+			if (r == 0)
+				continue;
 
-				nb.buf = sa;
-				switch( sa->sa_family){
-				case AF_INET:
-				  sa_size = sizeof (struct sockaddr_in);
-				  break;
-				case AF_INET6:
-				  sa_size = sizeof (struct sockaddr_in6);				 
-				  break;
-				}
-				nb.len = nb.maxlen = sa_size;
-				uaddr = taddr2uaddr(nconf, &nb);
-				(void) fprintf(stderr,
-				    "rpcbind : my address is %s\n", uaddr);
-				(void) free(uaddr);
-			}
-#endif
 			my_xprt = (SVCXPRT *)svc_tli_create(fd, nconf, &taddr, 
                                 RPC_MAXDATASIZE, RPC_MAXDATASIZE);
 			if (my_xprt == (SVCXPRT *)NULL) {
@@ -473,84 +536,15 @@ init_transport(struct netconfig *nconf)
                                         nconf->nc_netid);
 				goto error;
 			}
+			checkbind = 1;
+			fd = -1;
 		}
 		if (!checkbind)
 			return 1;
 	} else {	/* NC_TPI_COTS */
-		if ((fd = __rpc_nconf2fd(nconf)) < 0) {
-			syslog(LOG_ERR, "cannot create socket for %s",
-			    nconf->nc_netid);
-			return (1);
-		}
-
-		if ((strcmp(nconf->nc_netid, "local") != 0) &&
-		    (strcmp(nconf->nc_netid, "unix") != 0)) {
-			if ((aicode = getaddrinfo(NULL, servname, &hints, &res))!= 0) {
-			  if ((aicode = getaddrinfo(NULL, "portmapper", &hints, &res))!= 0) {
-			  printf("cannot get local address for %s: %s",  nconf->nc_netid, gai_strerror(aicode));
-			  syslog(LOG_ERR,
-				    "cannot get local address for %s: %s",
-				    nconf->nc_netid, gai_strerror(aicode));
-				return 1;
-			  }
-			}
-			addrlen = res->ai_addrlen;
-			sa = (struct sockaddr *)res->ai_addr;
-		}
-		oldmask = umask(S_IXUSR|S_IXGRP|S_IXOTH);
-		__rpc_fd2sockinfo(fd, &si);
-		if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on,
-				sizeof(on)) != 0) {
-			syslog(LOG_ERR, "cannot set SO_REUSEADDR on %s",
-				nconf->nc_netid);
-			if (res != NULL)
-				freeaddrinfo(res);
-			return 1;
-		}
-		if (bind(fd, sa, addrlen) < 0) {
-			syslog(LOG_ERR, "cannot bind %s: %m", nconf->nc_netid);
-			if (res != NULL)
-				freeaddrinfo(res);
-			return 1;
-		}
-		(void) umask(oldmask);
-
-		/* Copy the address */
-		taddr.addr.len = taddr.addr.maxlen = addrlen;
-		taddr.addr.buf = malloc(addrlen);
-		if (taddr.addr.buf == NULL) {
-			syslog(LOG_ERR, "cannot allocate memory for %s address",
-			    nconf->nc_netid);
-			if (res != NULL)
-				freeaddrinfo(res);
-			return 1;
-		}
-		memcpy(taddr.addr.buf, sa, addrlen);
-#ifdef RPCBIND_DEBUG
-		if (debugging) {
-			/* for debugging print out our universal address */
-			char *uaddr;
-			struct netbuf nb;
-		        int sa_size2 = 0;
-
-			nb.buf = sa;
-			switch( sa->sa_family){
-			case AF_INET:
-			  sa_size2 = sizeof (struct sockaddr_in);
-			  break;
-			case AF_INET6:
-			  sa_size2 = sizeof (struct sockaddr_in6);				 
-			  break;
-			}
-			nb.len = nb.maxlen = sa_size2;
-			uaddr = taddr2uaddr(nconf, &nb);
-			(void) fprintf(stderr, "rpcbind : my address is %s\n",
-			    uaddr);
-			(void) free(uaddr);
-		}
-#endif
-
-		listen(fd, SOMAXCONN);
+		memset(&taddr, 0, sizeof(taddr));
+		if (create_transport_socket(nconf, NULL, &taddr.addr, &fd) <= 0)
+			goto error;
 
 		my_xprt = (SVCXPRT *)svc_tli_create(fd, nconf, &taddr, RPC_MAXDATASIZE, RPC_MAXDATASIZE);
 		if (my_xprt == (SVCXPRT *)NULL) {
@@ -682,7 +676,8 @@ init_transport(struct netconfig *nconf)
 	}
 	return (0);
 error:
-	close(fd);
+	if (fd >= 0)
+		close(fd);
 	return (1);
 }
 
