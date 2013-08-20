@@ -50,6 +50,7 @@
 #include <sys/file.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <netinet/in.h>
 #include <rpc/rpc.h>
 #include <rpc/rpc_com.h>
 #ifdef PORTMAP
@@ -561,6 +562,31 @@ rpcbind_register_transport(struct netconfig *nconf, SVCXPRT *xprt, struct netbuf
 }
 
 /*
+ * Normally systemd will open sockets in dual ipv4/ipv6 mode.
+ * That won't work with netconfig and we'll only match
+ * the ipv6 socket. Convert it to IPV6_V6ONLY and issue
+ * a warning for the user to fix their systemd config.
+ */
+static int
+handle_ipv6_socket(int fd)
+{
+	int opt;
+	socklen_t len = sizeof(opt);
+
+	if (getsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &opt, &len)) {
+		syslog(LOG_ERR, "failed to get ipv6 socket opts: %m");
+		return -1;
+	}
+
+	if (opt) /* socket is already in V6ONLY mode */
+		return 0;
+
+	syslog(LOG_ERR, "systemd has passed an IPv4/IPv6 dual-mode socket.");
+	syslog(LOG_ERR, "Please fix your systemd config by specifying IPv4 and IPv6 sockets separately and using BindIPv6Only=ipv6-only.");
+	return -1;
+}
+
+/*
  * This will create a server socket for the given netid, bound to the
  * address specified by @hostname
  *
@@ -590,6 +616,9 @@ rpcbind_init_endpoint(struct netconfig *nconf, const char *hostname, int fd)
 			syslog(LOG_ERR, "cannot get address for socket fd %d", fd);
 			exit(1);
 		}
+
+		if (addr.ss_family == AF_INET6 && handle_ipv6_socket(fd))
+			return -1;
 
 		sockaddr2netbuf((struct sockaddr *) &addr, alen, &taddr.addr);
 	}
