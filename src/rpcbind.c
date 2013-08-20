@@ -447,6 +447,120 @@ skip:
 	return 0;
 }
 
+static int
+rpcbind_register_transport(struct netconfig *nconf, SVCXPRT *xprt, struct netbuf *bind_addr)
+{
+	struct __rpc_sockinfo si;
+	int status;
+
+	(void) __rpc_nconf2sockinfo(nconf, &si);
+
+#ifdef PORTMAP
+	/*
+	 * Register both the versions for tcp/ip, udp/ip.
+	 */
+	if (si.si_af == AF_INET &&
+	    (si.si_proto == IPPROTO_TCP || si.si_proto == IPPROTO_UDP)) {
+		struct pmaplist *pml;
+
+		pml = malloc(sizeof (struct pmaplist));
+		if (pml == NULL) {
+			syslog(LOG_ERR, "no memory!");
+			exit(1);
+		}
+		pml->pml_map.pm_prog = PMAPPROG;
+		pml->pml_map.pm_vers = PMAPVERS;
+		pml->pml_map.pm_port = PMAPPORT;
+		pml->pml_map.pm_prot = si.si_proto;
+
+		switch (si.si_proto) {
+		case IPPROTO_TCP:
+			tcptrans = strdup(nconf->nc_netid);
+			break;
+		case IPPROTO_UDP:
+			udptrans = strdup(nconf->nc_netid);
+			break;
+		}
+		pml->pml_next = list_pml;
+		list_pml = pml;
+
+		/* Add version 3 information */
+		pml = malloc(sizeof (struct pmaplist));
+		if (pml == NULL) {
+			syslog(LOG_ERR, "no memory!");
+			exit(1);
+		}
+		pml->pml_map = list_pml->pml_map;
+		pml->pml_map.pm_vers = RPCBVERS;
+		pml->pml_next = list_pml;
+		list_pml = pml;
+
+		/* Add version 4 information */
+		pml = malloc (sizeof (struct pmaplist));
+		if (pml == NULL) {
+			syslog(LOG_ERR, "no memory!");
+			exit(1);
+		}
+		pml->pml_map = list_pml->pml_map;
+		pml->pml_map.pm_vers = RPCBVERS4;
+		pml->pml_next = list_pml;
+		list_pml = pml;
+
+		/* Also add version 2 stuff to rpcbind list */
+		rbllist_add(PMAPPROG, PMAPVERS, nconf, bind_addr);
+	}
+
+	/* We need to support portmap over IPv4. It makes sense to
+	 * support it over AF_LOCAL as well, because that allows
+	 * rpcbind to identify the owner of a socket much better
+	 * than by relying on privileged ports to tell root from
+	 * non-root users. */
+	if (si.si_af == AF_INET || si.si_af == AF_LOCAL) {
+		if (!svc_register(xprt, PMAPPROG, PMAPVERS, pmap_service, 0)) {
+			syslog(LOG_ERR, "could not register on %s",
+					nconf->nc_netid);
+			return 0;
+		}
+	}
+#endif
+
+	/* version 3 registration */
+	if (!svc_reg(xprt, RPCBPROG, RPCBVERS, rpcb_service_3, NULL)) {
+		syslog(LOG_ERR, "could not register %s version 3",
+				nconf->nc_netid);
+		return 0;
+	}
+	rbllist_add(RPCBPROG, RPCBVERS, nconf, bind_addr);
+
+	/* version 4 registration */
+	if (!svc_reg(xprt, RPCBPROG, RPCBVERS4, rpcb_service_4, NULL)) {
+		syslog(LOG_ERR, "could not register %s version 4",
+				nconf->nc_netid);
+		return 0;
+	}
+	rbllist_add(RPCBPROG, RPCBVERS4, nconf, bind_addr);
+
+	/* decide if bound checking works for this transport */
+	status = add_bndlist(nconf, bind_addr);
+
+#ifdef RPCBIND_DEBUG
+	if (debugging) {
+		if (status < 0) {
+			fprintf(stderr, "Error in finding bind status for %s\n",
+				nconf->nc_netid);
+		} else if (status == 0) {
+			fprintf(stderr, "check binding for %s\n",
+				nconf->nc_netid);
+		} else if (status > 0) {
+			fprintf(stderr, "No check binding for %s\n",
+				nconf->nc_netid);
+		}
+	}
+#endif
+
+	return 1;
+}
+
 /*
  * Adds the entry into the rpcbind database.
  * If PORTMAP, then for UDP and TCP, it adds the entries for version 2 also
@@ -554,107 +668,9 @@ init_transport(struct netconfig *nconf)
 		}
 	}
 
-#ifdef PORTMAP
-	/*
-	 * Register both the versions for tcp/ip, udp/ip.
-	 */
-	if (si.si_af == AF_INET &&
-	    (si.si_proto == IPPROTO_TCP || si.si_proto == IPPROTO_UDP)) {
-		struct pmaplist *pml;
+	if (!rpcbind_register_transport(nconf, my_xprt, &taddr.addr))
+		return (1);
 
-		pml = malloc(sizeof (struct pmaplist));
-		if (pml == NULL) {
-			syslog(LOG_ERR, "no memory!");
-			exit(1);
-		}
-		pml->pml_map.pm_prog = PMAPPROG;
-		pml->pml_map.pm_vers = PMAPVERS;
-		pml->pml_map.pm_port = PMAPPORT;
-		pml->pml_map.pm_prot = si.si_proto;
-
-		switch (si.si_proto) {
-		case IPPROTO_TCP:
-			tcptrans = strdup(nconf->nc_netid);
-			break;
-		case IPPROTO_UDP:
-			udptrans = strdup(nconf->nc_netid);
-			break;
-		} 
-		pml->pml_next = list_pml;
-		list_pml = pml;
-
-		/* Add version 3 information */
-		pml = malloc(sizeof (struct pmaplist));
-		if (pml == NULL) {
-			syslog(LOG_ERR, "no memory!");
-			exit(1);
-		}
-		pml->pml_map = list_pml->pml_map;
-		pml->pml_map.pm_vers = RPCBVERS;
-		pml->pml_next = list_pml;
-		list_pml = pml;
-
-		/* Add version 4 information */
-		pml = malloc (sizeof (struct pmaplist));
-		if (pml == NULL) {
-			syslog(LOG_ERR, "no memory!");
-			exit(1);
-		}
-		pml->pml_map = list_pml->pml_map;
-		pml->pml_map.pm_vers = RPCBVERS4;
-		pml->pml_next = list_pml;
-		list_pml = pml;
-
-		/* Also add version 2 stuff to rpcbind list */
-		rbllist_add(PMAPPROG, PMAPVERS, nconf, &taddr.addr);
-	}
-
-	/* We need to support portmap over IPv4. It makes sense to
-	 * support it over AF_LOCAL as well, because that allows
-	 * rpcbind to identify the owner of a socket much better
-	 * than by relying on privileged ports to tell root from
-	 * non-root users. */
-	if (si.si_af == AF_INET || si.si_af == AF_LOCAL) {
-		if (!svc_register(my_xprt, PMAPPROG, PMAPVERS, pmap_service, 0)) {
-			syslog(LOG_ERR, "could not register on %s",
-					nconf->nc_netid);
-			goto error;
-		}
-	}
-#endif
-
-	/* version 3 registration */
-	if (!svc_reg(my_xprt, RPCBPROG, RPCBVERS, rpcb_service_3, NULL)) {
-		syslog(LOG_ERR, "could not register %s version 3",
-				nconf->nc_netid);
-		goto error;
-	}
-	rbllist_add(RPCBPROG, RPCBVERS, nconf, &taddr.addr);
-
-	/* version 4 registration */
-	if (!svc_reg(my_xprt, RPCBPROG, RPCBVERS4, rpcb_service_4, NULL)) {
-		syslog(LOG_ERR, "could not register %s version 4",
-				nconf->nc_netid);
-		goto error;
-	}
-	rbllist_add(RPCBPROG, RPCBVERS4, nconf, &taddr.addr);
-
-	/* decide if bound checking works for this transport */
-	status = add_bndlist(nconf, &taddr.addr);
-#ifdef RPCBIND_DEBUG
-	if (debugging) {
-		if (status < 0) {
-			fprintf(stderr, "Error in finding bind status for %s\n",
-				nconf->nc_netid);
-		} else if (status == 0) {
-			fprintf(stderr, "check binding for %s\n",
-				nconf->nc_netid);
-		} else if (status > 0) {
-			fprintf(stderr, "No check binding for %s\n",
-				nconf->nc_netid);
-		}
-	}
-#endif
 	/*
 	 * rmtcall only supported on CLTS transports for now.
 	 */
