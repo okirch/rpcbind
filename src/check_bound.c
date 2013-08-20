@@ -119,7 +119,7 @@ add_bndlist(struct netconfig *nconf, struct netbuf *baddr /*__unused*/)
 	fdl = malloc(sizeof (struct fdlist));
 	if (fdl == NULL) {
 		freenetconfigent(newnconf);
-		syslog(LOG_ERR, "no memory!");
+		rpcbind_log_error("no memory!");
 		return (-1);
 	}
 	fdl->nconf = newnconf;
@@ -179,7 +179,7 @@ mergeaddr(SVCXPRT *xprt, char *netid, char *uaddr, char *saddr)
 	} else {
 		c_uaddr = taddr2uaddr(fdl->nconf, svc_getrpccaller(xprt));
 		if (c_uaddr == NULL) {
-			syslog(LOG_ERR, "taddr2uaddr failed for %s",
+			rpcbind_log_error("taddr2uaddr failed for %s",
 				fdl->nconf->nc_netid);
 			return (NULL);
 		}

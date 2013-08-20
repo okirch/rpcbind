@@ -136,6 +136,9 @@ char *addrmerge(struct netbuf *caller, char *serv_uaddr, char *clnt_uaddr, char 
 void network_init(void);
 struct sockaddr *local_sa(int);
 
+void rpcbind_log_error(const char *, ...);
+void rpcbind_log(int, const char *, ...);
+
 /* For different getaddr semantics */
 #define	RPCB_ALLVERS 0
 #define	RPCB_ONEVERS 1

@@ -42,7 +42,6 @@
 #include <netinet/in.h>
 #include <rpc/pmap_prot.h>
 #endif
-#include <syslog.h>
 #include <unistd.h>
 #include <errno.h>
 
@@ -77,9 +76,9 @@ write_struct(char *filename, xdrproc_t structproc, void *list)
 			close(i);
 		fp = fopen(filename, "w");
 		if (fp == NULL) {
-			syslog(LOG_ERR,
+			rpcbind_log_error(
 				"cannot open file = %s for writing", filename);
-			syslog(LOG_ERR, "cannot save any registration");
+			rpcbind_log_error("cannot save any registration");
 			return (FALSE);
 		}
 	}
@@ -87,7 +86,7 @@ write_struct(char *filename, xdrproc_t structproc, void *list)
 	xdrstdio_create(&xdrs, fp, XDR_ENCODE);
 
 	if (structproc(&xdrs, list) == FALSE) {
-		syslog(LOG_ERR, "xdr_%s: failed", filename);
+		rpcbind_log_error("xdr_%s: failed", filename);
 		fclose(fp);
 		return (FALSE);
 	}
@@ -106,7 +105,7 @@ read_struct(char *filename, xdrproc_t structproc, void *list)
 		fprintf(stderr, "rpcbind: using '%s' startup file\n", filename);
 
 	if ((fp = fopen(filename, "r")) == NULL) {
-		syslog(LOG_ERR,
+		rpcbind_log_error(
 			"Cannot open '%s' file for reading, errno %d (%s)", 
 			filename, errno, strerror(errno));
 		goto error;
@@ -122,14 +121,14 @@ read_struct(char *filename, xdrproc_t structproc, void *list)
 
 	fclose(fp);
 	if (unlink(filename) < 0) {
-		syslog(LOG_ERR, "Cannot unlink '%s', errno %d (%s)", 
+		rpcbind_log_error("Cannot unlink '%s', errno %d (%s)",
 			filename, errno, strerror(errno));
 	}
 	return (TRUE);
 
 error:	
 	if (errno != ENOENT && unlink(filename) < 0) {
-		syslog(LOG_ERR, "Cannot unlink '%s', errno %d (%s)", 
+		rpcbind_log_error("Cannot unlink '%s', errno %d (%s)",
 			filename, errno, strerror(errno));
 	}
 	if (debugging)

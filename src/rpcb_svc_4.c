@@ -48,7 +48,6 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <netconfig.h>
-#include <syslog.h>
 #include <string.h>
 #include <stdlib.h>
 #include "rpcbind.h"

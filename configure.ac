@@ -36,6 +36,7 @@ AC_ARG_WITH([systemdsystemunitdir],
   if test "x$with_systemdsystemunitdir" != xno -a "x$with_systemdsystemunitdir" != "x"; then
     AC_SUBST([systemdsystemunitdir], [$with_systemdsystemunitdir])
     PKG_CHECK_MODULES([SYSTEMD], [libsystemd-daemon])
+    PKG_CHECK_MODULES([SYSTEMD_JOURNAL], [libsystemd-journal])
   fi
 AM_CONDITIONAL(SYSTEMD, [test -n "$with_systemdsystemunitdir" -a "x$with_systemdsystemunitdir" != xno ])
 
