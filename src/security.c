@@ -274,7 +274,7 @@ logit(int severity, struct sockaddr *addr, rpcproc_t procnum, rpcprog_t prognum,
 		  }
 		  getnameinfo(addr,size , fromname, sizeof fromname, NULL, 0, NI_NUMERICHOST);
 		}
-		syslog(severity, "connect from %s to %s(%s)%s",
+		rpcbind_log(severity, "connect from %s to %s(%s)%s",
 			fromname, procname, progname, text);
 		_exit(0);
 	}

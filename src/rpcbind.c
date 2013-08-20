@@ -59,18 +59,20 @@
 #include <arpa/inet.h>
 #ifdef SYSTEMD
 #include <systemd/sd-daemon.h>
+#include <systemd/sd-journal.h>
 #endif
+#include <syslog.h>
 #include <fcntl.h>
 #include <netdb.h>
 #include <stdio.h>
 #include <netconfig.h>
 #include <stdlib.h>
 #include <unistd.h>
-#include <syslog.h>
 #include <err.h>
 #include <pwd.h>
 #include <grp.h>
 #include <string.h>
+#include <stdarg.h>
 #include <errno.h>
 #ifdef HAVE_NSS_H
 #include <nss.h>
@@ -234,19 +236,19 @@ main(int argc, char *argv[])
 		__nss_configure_lookup("passwd", "files");
 
 		if((p = getpwnam(id)) == NULL) {
-			syslog(LOG_ERR, "cannot get uid of '%s': %m", id);
+			rpcbind_log_error("cannot get uid of '%s': %m", id);
 			exit(1);
 		}
                 if (setgid(p->pw_gid) == -1) {
-                        syslog(LOG_ERR, "setgid to '%s' (%d) failed: %m", id, p->pw_gid);
+                        rpcbind_log_error("setgid to '%s' (%d) failed: %m", id, p->pw_gid);
                         exit(1);
                 }
 		if (setgroups(0, NULL) == -1) {
-			syslog(LOG_ERR, "dropping supplemental groups failed: %m");
+			rpcbind_log_error("dropping supplemental groups failed: %m");
 			exit(1);
 		}
 		if (setuid(p->pw_uid) == -1) {
-			syslog(LOG_ERR, "setuid to '%s' (%d) failed: %m", id, p->pw_uid);
+			rpcbind_log_error("setuid to '%s' (%d) failed: %m", id, p->pw_uid);
 			exit(1);
 		}
 	}
@@ -260,7 +262,7 @@ main(int argc, char *argv[])
 	network_init();
 
 	my_svc_run();
-	syslog(LOG_ERR, "svc_run returned unexpectedly");
+	rpcbind_log_error("svc_run returned unexpectedly");
 	rpcbind_abort();
 	/* NOTREACHED */
 
@@ -277,7 +279,7 @@ sockaddr2netbuf(const struct sockaddr *sa, socklen_t alen, struct netbuf *abuf)
 	abuf->buf = malloc(alen);
 
 	if (abuf->buf == NULL) {
-		syslog(LOG_ERR, "not enough memory for address buffer (%u bytes)", alen);
+		rpcbind_log_error("not enough memory for address buffer (%u bytes)", alen);
 		exit(1);
 	}
 
@@ -295,7 +297,7 @@ do_hostname_lookup(struct netconfig *nconf, const char *hostname, struct netbuf 
 	int aicode;
 
 	if (!__rpc_nconf2sockinfo(nconf, &si)) {
-		syslog(LOG_ERR, "cannot get sockinfo for %s", nconf->nc_netid);
+		rpcbind_log_error("cannot get sockinfo for %s", nconf->nc_netid);
 		return -1;
 	}
 
@@ -334,7 +336,7 @@ do_hostname_lookup(struct netconfig *nconf, const char *hostname, struct netbuf 
 
 	if ((aicode = getaddrinfo(hostname, servname, &hints, &res)) != 0) {
 		if ((aicode = getaddrinfo(hostname, "portmapper", &hints, &res)) != 0) {
-			syslog(LOG_ERR,
+			rpcbind_log_error(
 			    "cannot get %s address for %s: %s",
 			    nconf->nc_netid,
 			    hostname? hostname : "*",
@@ -389,7 +391,7 @@ create_transport_socket(struct netconfig *nconf, const char *hostname, struct ne
 	 * XXX - using RPC library internal functions.
 	 */
 	if ((fd = __rpc_nconf2fd(nconf)) < 0) {
-		syslog(LOG_ERR, "cannot create socket for %s", nconf->nc_netid);
+		rpcbind_log_error("cannot create socket for %s", nconf->nc_netid);
 		return -1;
 	}
 
@@ -400,14 +402,14 @@ create_transport_socket(struct netconfig *nconf, const char *hostname, struct ne
 		 * This allows us to restart the server even if there are
 		 * TCP sockets loitering around in TIME_WAIT */
 		if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on)) != 0) {
-			syslog(LOG_ERR, "cannot set SO_REUSEADDR on %s", nconf->nc_netid);
+			rpcbind_log_error("cannot set SO_REUSEADDR on %s", nconf->nc_netid);
 			return -1;
 		}
 	}
 
 	oldmask = umask(S_IXUSR|S_IXGRP|S_IXOTH);
 	if (bind(fd, (struct sockaddr *) abuf->buf, abuf->len) != 0) {
-		syslog(LOG_ERR, "cannot bind %s on %s: %m",
+		rpcbind_log_error("cannot bind %s on %s: %m",
 			hostname? hostname : "*",
 			nconf->nc_netid);
 		(void) umask(oldmask);
@@ -417,7 +419,7 @@ create_transport_socket(struct netconfig *nconf, const char *hostname, struct ne
 
 	if (nconf->nc_semantics != NC_TPI_CLTS) {
 		if (listen(fd, SOMAXCONN) < 0) {
-			syslog(LOG_ERR, "unable to listen on %s socket: %m",
+			rpcbind_log_error("unable to listen on %s socket: %m",
 					nconf->nc_netid);
 			return -1;
 		}
@@ -465,7 +467,7 @@ rpcbind_register_transport(struct netconfig *nconf, SVCXPRT *xprt, struct netbuf
 
 		pml = malloc(sizeof (struct pmaplist));
 		if (pml == NULL) {
-			syslog(LOG_ERR, "no memory!");
+			rpcbind_log_error("no memory!");
 			exit(1);
 		}
 		pml->pml_map.pm_prog = PMAPPROG;
@@ -487,7 +489,7 @@ rpcbind_register_transport(struct netconfig *nconf, SVCXPRT *xprt, struct netbuf
 		/* Add version 3 information */
 		pml = malloc(sizeof (struct pmaplist));
 		if (pml == NULL) {
-			syslog(LOG_ERR, "no memory!");
+			rpcbind_log_error("no memory!");
 			exit(1);
 		}
 		pml->pml_map = list_pml->pml_map;
@@ -498,7 +500,7 @@ rpcbind_register_transport(struct netconfig *nconf, SVCXPRT *xprt, struct netbuf
 		/* Add version 4 information */
 		pml = malloc (sizeof (struct pmaplist));
 		if (pml == NULL) {
-			syslog(LOG_ERR, "no memory!");
+			rpcbind_log_error("no memory!");
 			exit(1);
 		}
 		pml->pml_map = list_pml->pml_map;
@@ -517,7 +519,7 @@ rpcbind_register_transport(struct netconfig *nconf, SVCXPRT *xprt, struct netbuf
 	 * non-root users. */
 	if (si.si_af == AF_INET || si.si_af == AF_LOCAL) {
 		if (!svc_register(xprt, PMAPPROG, PMAPVERS, pmap_service, 0)) {
-			syslog(LOG_ERR, "could not register on %s",
+			rpcbind_log_error("could not register on %s",
 					nconf->nc_netid);
 			return 0;
 		}
@@ -526,7 +528,7 @@ rpcbind_register_transport(struct netconfig *nconf, SVCXPRT *xprt, struct netbuf
 
 	/* version 3 registration */
 	if (!svc_reg(xprt, RPCBPROG, RPCBVERS, rpcb_service_3, NULL)) {
-		syslog(LOG_ERR, "could not register %s version 3",
+		rpcbind_log_error("could not register %s version 3",
 				nconf->nc_netid);
 		return 0;
 	}
@@ -534,7 +536,7 @@ rpcbind_register_transport(struct netconfig *nconf, SVCXPRT *xprt, struct netbuf
 
 	/* version 4 registration */
 	if (!svc_reg(xprt, RPCBPROG, RPCBVERS4, rpcb_service_4, NULL)) {
-		syslog(LOG_ERR, "could not register %s version 4",
+		rpcbind_log_error("could not register %s version 4",
 				nconf->nc_netid);
 		return 0;
 	}
@@ -574,15 +576,15 @@ handle_ipv6_socket(int fd)
 	socklen_t len = sizeof(opt);
 
 	if (getsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &opt, &len)) {
-		syslog(LOG_ERR, "failed to get ipv6 socket opts: %m");
+		rpcbind_log_error("failed to get ipv6 socket opts: %m");
 		return -1;
 	}
 
 	if (opt) /* socket is already in V6ONLY mode */
 		return 0;
 
-	syslog(LOG_ERR, "systemd has passed an IPv4/IPv6 dual-mode socket.");
-	syslog(LOG_ERR, "Please fix your systemd config by specifying IPv4 and IPv6 sockets separately and using BindIPv6Only=ipv6-only.");
+	rpcbind_log_error("systemd has passed an IPv4/IPv6 dual-mode socket.");
+	rpcbind_log_error("Please fix your systemd config by specifying IPv4 and IPv6 sockets separately and using BindIPv6Only=ipv6-only.");
 	return -1;
 }
 
@@ -613,7 +615,7 @@ rpcbind_init_endpoint(struct netconfig *nconf, const char *hostname, int fd)
 		socklen_t alen = sizeof(addr);
 
 		if (getsockname(fd, (struct sockaddr *) &addr, &alen) < 0) {
-			syslog(LOG_ERR, "cannot get address for socket fd %d", fd);
+			rpcbind_log_error("cannot get address for socket fd %d", fd);
 			exit(1);
 		}
 
@@ -625,7 +627,7 @@ rpcbind_init_endpoint(struct netconfig *nconf, const char *hostname, int fd)
 
 	my_xprt = (SVCXPRT *)svc_tli_create(fd, nconf, &taddr, RPC_MAXDATASIZE, RPC_MAXDATASIZE);
 	if (my_xprt == (SVCXPRT *)NULL) {
-		syslog(LOG_ERR, "%s: could not create service", nconf->nc_netid);
+		rpcbind_log_error("%s: could not create service", nconf->nc_netid);
 		close(fd);
 		return 0;
 	}
@@ -667,7 +669,7 @@ init_transport(struct netconfig *nconf)
 #endif
 
 	if (!__rpc_nconf2sockinfo(nconf, &si)) {
-		syslog(LOG_ERR, "cannot get information for %s",
+		rpcbind_log_error("cannot get information for %s",
 		    nconf->nc_netid);
 		return (1);
 	}
@@ -746,7 +748,7 @@ init_transports_daemon(void)
 
 	nc_handle = setnetconfig(); 	/* open netconfig file */
 	if (nc_handle == NULL) {
-		syslog(LOG_ERR, "could not read /etc/netconfig");
+		rpcbind_log_error("could not read /etc/netconfig");
 		exit(1);
 	}
 
@@ -754,7 +756,7 @@ init_transports_daemon(void)
 	if (nconf == NULL)
 		nconf = getnetconfigent("unix");
 	if (nconf == NULL) {
-		syslog(LOG_ERR, "rpcbind: can't find local transport\n");
+		rpcbind_log_error("rpcbind: can't find local transport\n");
 		exit(1);
 	}
 
@@ -798,11 +800,11 @@ init_transports_systemd()
 	int nfds, n;
 
 	if ((nfds = sd_listen_fds(0)) < 0) {
-		syslog(LOG_ERR, "failed to acquire systemd sockets: %s", strerror(-nfds));
+		rpcbind_log_error("failed to acquire systemd sockets: %s", strerror(-nfds));
 		exit(1);
 	}
 	if (nfds >= 16) {
-		syslog(LOG_ERR, "too many sockets passed by systemd (%u)", nfds);
+		rpcbind_log_error("too many sockets passed by systemd (%u)", nfds);
 		exit(1);
 	}
 
@@ -814,18 +816,18 @@ init_transports_systemd()
 		fd = SD_LISTEN_FDS_START + n;
 
 		if (!__rpc_fd2sockinfo(fd, &si)) {
-			syslog(LOG_ERR, "cannot get socket information for fd %d", fd);
+			rpcbind_log_error("cannot get socket information for fd %d", fd);
 			exit(1);
 		}
 
 		/* Now find the netconfig entry matching this transport */
 		if ((nconf = sockinfo2nconf(&nc_handle, &si)) == NULL) {
-			syslog(LOG_ERR, "not netconfig for socket fd %d", fd);
+			rpcbind_log_error("not netconfig for socket fd %d", fd);
 			exit(1);
 		}
 
 		if (rpcbind_init_endpoint(nconf, NULL, fd) <= 0) {
-			syslog(LOG_ERR, "unable to create transport for socket fd %d", fd);
+			rpcbind_log_error("unable to create transport for socket fd %d", fd);
 			exit(1);
 		}
 	}
@@ -843,7 +845,7 @@ rbllist_add(rpcprog_t prog, rpcvers_t vers, struct netconfig *nconf,
 
 	rbl = malloc(sizeof (rpcblist));
 	if (rbl == NULL) {
-		syslog(LOG_ERR, "no memory!");
+		rpcbind_log_error("no memory!");
 		exit(1);
 	}
 #ifdef RPCBIND_DEBUG	
@@ -872,7 +874,7 @@ terminate(int dummy /*__unused*/)
 	unlink(_PATH_RPCBINDSOCK);
 	unlink(RPCBINDDLOCK);
 #ifdef WARMSTART
-	syslog(LOG_ERR,
+	rpcbind_log_error(
 		"rpcbind terminating on signal. Restart with \"rpcbind -w\"");
 	write_warmstart();	/* Dump yourself */
 #endif
@@ -955,4 +957,34 @@ void
 toggle_verboselog(int dummy /*__unused*/)
 {
 	verboselog = !verboselog;
+}
+
+void
+rpcbind_log_error(const char *fmt, ...)
+{
+	va_list ap;
+
+	va_start(ap, fmt);
+#ifdef SYSTEMD
+	if (systemd_activation)
+		sd_journal_printv(LOG_ERR, fmt, ap);
+	else
+#endif
+		vsyslog(LOG_ERR, fmt, ap);
+	va_end(ap);
+}
+
+void
+rpcbind_log(int severity, const char *fmt, ...)
+{
+	va_list ap;
+
+	va_start(ap, fmt);
+#ifdef SYSTEMD
+	if (systemd_activation)
+		sd_journal_printv(severity, fmt, ap);
+	else
+#endif
+		vsyslog(severity, fmt, ap);
+	va_end(ap);
 }

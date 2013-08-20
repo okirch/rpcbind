@@ -39,9 +39,9 @@ rpcbind_SOURCES = \
 rpcbind_LDADD = $(TIRPC_LIBS)
 
 if SYSTEMD
-AM_CPPFLAGS += $(SYSTEMD_CFLAGS) -DSYSTEMD
+AM_CPPFLAGS += $(SYSTEMD_CFLAGS) $(SYSTEMD_JOURNAL_CFLAGS) -DSYSTEMD
 
-rpcbind_LDADD += $(SYSTEMD_LIBS)
+rpcbind_LDADD += $(SYSTEMD_LIBS) $(SYSTEMD_JOURNAL_LIBS)
 
 systemd/rpcbind.service: systemd/rpcbind.service.in Makefile
 	sed -e 's,@bindir\@,$(bindir),g' \
