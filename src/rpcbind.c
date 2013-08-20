@@ -632,52 +632,46 @@ init_transport(struct netconfig *nconf)
 		return (1);
 	}
 
-	if (nconf->nc_semantics == NC_TPI_CLTS) {
-		int nhostsbak;
-		int checkbind;
+	/* Check if the -h option was used to specify addresses to bind to.
+	 * The original purpose was to allow multihomed hosts to function
+	 * properly, making the reply originate from the same IP address
+	 * that it was sent to. We're solving this differently in the meantime
+	 * (using PKTINFO magic in libtirpc), but there may be other uses for
+	 * this option, like restricting rpcbind to certain "public" interfaces
+	 */
+	if (nhosts == 0 && nconf->nc_semantics == NC_TPI_CLTS) {
+		int numbound = 0, n, r;
 
-		/*
-		 * If no hosts were specified, just bind to INADDR_ANY.  Otherwise
-		 * make sure 127.0.0.1 is added to the list.
-		 */
-		nhostsbak = nhosts;
-		nhostsbak++;
-		hosts = realloc(hosts, nhostsbak * sizeof(char *));
-		if (nhostsbak == 1)
-			hosts[0] = "*";
-		else {
-			if (si.si_af == AF_INET) {
-				hosts[nhostsbak - 1] = "127.0.0.1";
-			} else if (si.si_af == AF_INET6) {
-				hosts[nhostsbak - 1] = "::1";
-			} else
-				return 1;
+		/* Ensure that we always bind to loopback */
+		switch (si.si_af) {
+		case AF_INET:
+			if (rpcbind_init_endpoint(nconf, "127.0.0.1") > 0)
+				numbound++;
+			break;
+
+		case AF_INET6:
+			if (rpcbind_init_endpoint(nconf, "::1") > 0)
+				numbound++;
+			break;
 		}
 
-	       /*
-		* Bind to specific IPs if asked to
-		*/
-		checkbind = 0;
-		while (nhostsbak > 0) {
-			int r;
+		for (n = 0; n < nhosts; ++n) {
+			const char *hostname = hosts[n];
 
-			--nhostsbak;
+			/* In case someone gets the idea to specify "-h '*'" */
+			if (strcmp("*", hostname) == 0)
+				hostname = NULL;
 
-			/*
-			 * If no hosts were specified, just bind to INADDR_ANY
-			 */
-			if (strcmp("*", hosts[nhostsbak]) == 0)
-				hosts[nhostsbak] = NULL;
-
-			r = rpcbind_init_endpoint(nconf, hosts[nhostsbak]);
+			r = rpcbind_init_endpoint(nconf, hostname);
 			if (r < 0)
 				return 1;
 			if (r > 0)
-				checkbind = 1;
+				numbound++;
 		}
-		if (!checkbind)
+
+		if (numbound == 0)
 			return 1;
-	} else {	/* NC_TPI_COTS */
+	} else {
 		if (rpcbind_init_endpoint(nconf, NULL) <= 0)
 			return 1;
 	}
