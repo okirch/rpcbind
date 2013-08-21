@@ -23,7 +23,7 @@ AC_ARG_WITH([statedir],
 AC_SUBST([statedir], [$with_statedir])
 
 AC_ARG_WITH([rpcuser],
-  AS_HELP_STRING([--with-rpcuser=ARG], [use ARG for RPC @<:@default=root@:>@]),
+  AS_HELP_STRING([--with-rpcuser=ARG], [use ARG for RPC @<:@default=root@:>@])
   ,, [with_rpcuser=root])
 AC_SUBST([rpcuser], [$with_rpcuser])
  
