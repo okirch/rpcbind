@@ -260,9 +260,13 @@ main(int argc, char *argv[])
 #endif
 
 	network_init();
+
 #ifdef SYSTEMD
-	if (systemd_activation)
-		sd_notify(0, "READY=1");
+	/* Try to notify system of successful startup, regardless of whether we
+	 * used systemd socket activation or not. When started from the command
+	 * line, this should not hurt either.
+	 */
+	sd_notify(0, "READY=1");
 #endif
 	my_svc_run();
 	rpcbind_log_error("svc_run returned unexpectedly");
