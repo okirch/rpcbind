@@ -3,7 +3,8 @@ Description=RPC Bind
 
 [Service]
 Type=notify
-ExecStart=@bindir@/rpcbind -w -f
+EnvironmentFile=-/etc/sysconfig/rpcbind
+ExecStart=@bindir@/rpcbind $RPCBIND_OPTIONS -w -f
 
 [Install]
 WantedBy=multi-user.target
