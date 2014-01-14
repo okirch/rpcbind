@@ -40,6 +40,7 @@ AC_ARG_WITH([systemdsystemunitdir],
   fi
 AM_CONDITIONAL(SYSTEMD, [test -n "$with_systemdsystemunitdir" -a "x$with_systemdsystemunitdir" != xno ])
 
+AC_CHECK_HEADERS(nss.h)
 
 AS_IF([test x$enable_libwrap = xyes], [
 	AC_CHECK_LIB([wrap], [hosts_access], ,
