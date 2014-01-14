@@ -688,7 +688,7 @@ init_transport(struct netconfig *nconf)
 	 * (using PKTINFO magic in libtirpc), but there may be other uses for
 	 * this option, like restricting rpcbind to certain "public" interfaces
 	 */
-	if (nhosts == 0 && nconf->nc_semantics == NC_TPI_CLTS) {
+	if (nhosts != 0 && nconf->nc_semantics == NC_TPI_CLTS) {
 		int numbound = 0, n, r;
 
 		/* Ensure that we always bind to loopback */
