@@ -115,8 +115,6 @@ struct rpcbdump_short
 
 #ifdef PORTMAP
 static void ip_ping (u_short, char *, int, char **);
-static CLIENT *clnt_com_create (struct sockaddr_in *, u_long, u_long, int *,
-				char *);
 static void pmapdump (int, char **);
 static void get_inet_address (struct sockaddr_in *, char *);
 static CLIENT *ip_getclient(const char *hostname, rpcprog_t prognum, rpcvers_t versnum, const char *proto);
@@ -357,40 +355,6 @@ local_rpcb (rpcprog_t prog, rpcvers_t vers)
 }
 
 #ifdef PORTMAP
-static CLIENT *
-clnt_com_create (addr, prog, vers, fdp, trans)
-     struct sockaddr_in *addr;
-     u_long prog;
-     u_long vers;
-     int *fdp;
-     char *trans;
-{
-  CLIENT *clnt;
-
-  if (strcmp (trans, "tcp") == 0)
-    {
-      clnt = clnttcp_create (addr, prog, vers, fdp, 0, 0);
-    }
-  else
-    {
-      struct timeval to;
-
-      to.tv_sec = 5;
-      to.tv_usec = 0;
-      clnt = clntudp_create (addr, prog, vers, to, fdp);
-    }
-  if (clnt == (CLIENT *) NULL)
-    {
-      clnt_pcreateerror ("rpcinfo");
-      if (vers == MIN_VERS)
-	printf ("program %lu is not available\n", prog);
-      else
-	printf ("program %lu version %lu is not available\n", prog, vers);
-      exit (1);
-    }
-  return (clnt);
-}
-
 static enum clnt_stat
 ip_ping_one(client, vers)
      CLIENT *client;
