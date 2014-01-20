@@ -390,6 +390,19 @@ clnt_com_create (addr, prog, vers, fdp, trans)
   return (clnt);
 }
 
+static enum clnt_stat
+ip_ping_one(client, vers)
+     CLIENT *client;
+     u_int32_t vers;
+{
+  struct timeval to = { .tv_sec = 10, .tv_usec = 0 };
+
+  (void) CLNT_CONTROL (client, CLSET_VERS, &vers);
+  return CLNT_CALL (client, NULLPROC, (xdrproc_t) xdr_void,
+		    (char *) NULL, (xdrproc_t) xdr_void, (char *) NULL,
+		    to);
+}
+
 /*
  * If portnum is 0, then go and get the address from portmapper, which happens
  * transparently through clnt*_create(); If version number is not given, it
@@ -406,7 +419,6 @@ ip_ping (portnum, trans, argc, argv)
 {
   CLIENT *client;
   int fd = RPC_ANYFD;
-  struct timeval to;
   struct sockaddr_in addr;
   enum clnt_stat rpc_stat;
   u_long prognum, vers, minvers, maxvers;
@@ -418,8 +430,6 @@ ip_ping (portnum, trans, argc, argv)
       usage ();
       exit (1);
     }
-  to.tv_sec = 10;
-  to.tv_usec = 0;
   prognum = getprognum (argv[1]);
   get_inet_address (&addr, argv[0]);
   if (argc == 2)
@@ -436,9 +446,7 @@ ip_ping (portnum, trans, argc, argv)
     }
   addr.sin_port = htons (portnum);
   client = clnt_com_create (&addr, prognum, vers, &fd, trans);
-  rpc_stat = CLNT_CALL (client, NULLPROC, (xdrproc_t) xdr_void,
-			(char *) NULL, (xdrproc_t) xdr_void, (char *) NULL,
-			to);
+  rpc_stat = ip_ping_one(client, vers);
   if (argc != 2)
     {
       /* Version number was known */
@@ -447,8 +455,8 @@ ip_ping (portnum, trans, argc, argv)
       (void) CLNT_DESTROY (client);
       return;
     }
+
   /* Version number not known */
-  (void) CLNT_CONTROL (client, CLSET_FD_NCLOSE, (char *) NULL);
   if (rpc_stat == RPC_PROGVERSMISMATCH)
     {
       clnt_geterr (client, &rpcerr);
@@ -461,12 +469,7 @@ ip_ping (portnum, trans, argc, argv)
        * Oh dear, it DOES support version 0.
        * Let's try version MAX_VERS.
        */
-      (void) CLNT_DESTROY (client);
-      addr.sin_port = htons (portnum);
-      client = clnt_com_create (&addr, prognum, MAX_VERS, &fd, trans);
-      rpc_stat = CLNT_CALL (client, NULLPROC, (xdrproc_t) xdr_void,
-			    (char *) NULL, (xdrproc_t) xdr_void,
-			    (char *) NULL, to);
+      rpc_stat = ip_ping_one(client, MAX_VERS);
       if (rpc_stat == RPC_PROGVERSMISMATCH)
 	{
 	  clnt_geterr (client, &rpcerr);
@@ -495,21 +498,15 @@ ip_ping (portnum, trans, argc, argv)
       (void) pstatus (client, prognum, (u_long) 0);
       exit (1);
     }
-  (void) CLNT_DESTROY (client);
   for (vers = minvers; vers <= maxvers; vers++)
     {
-      addr.sin_port = htons (portnum);
-      client = clnt_com_create (&addr, prognum, vers, &fd, trans);
-      rpc_stat = CLNT_CALL (client, NULLPROC, (xdrproc_t) xdr_void,
-			    (char *) NULL, (xdrproc_t) xdr_void,
-			    (char *) NULL, to);
+      rpc_stat = ip_ping_one(client, vers);
       if (pstatus (client, prognum, vers) < 0)
 	failure = 1;
-      (void) CLNT_DESTROY (client);
     }
   if (failure)
     exit (1);
-  (void) close (fd);
+  (void) CLNT_DESTROY (client);
   return;
 }
 
