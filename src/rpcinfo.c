@@ -484,7 +484,6 @@ pmapdump (argc, argv)
      int argc;
      char **argv;
 {
-  struct sockaddr_in server_addr;
   struct pmaplist *head = NULL;
   int socket = RPC_ANYSOCK;
   struct timeval minutetimeout;
@@ -502,10 +501,13 @@ pmapdump (argc, argv)
   if (argc == 1)
     {
       host = argv[0];
-      get_inet_address (&server_addr, host);
-      server_addr.sin_port = htons (PMAPPORT);
-      client = clnttcp_create (&server_addr, PMAPPROG, PMAPVERS,
-			       &socket, 50, 500);
+
+      /* This is a little bit more complicated than it should be.
+       * ip_getclient will do an rpcb_getaddr call to identify the
+       * port of the portmapper - but it works, and it's easier than
+       * creating a copy of ip_getclient that avoids the getaddr call.
+       */
+      client = ip_getclient(host, PMAPPROG, PMAPVERS, "tcp");
     }
   else
     client = local_rpcb (PMAPPROG, PMAPVERS);
