@@ -116,7 +116,6 @@ struct rpcbdump_short
 #ifdef PORTMAP
 static void ip_ping (u_short, char *, int, char **);
 static void pmapdump (int, char **);
-static void get_inet_address (struct sockaddr_in *, char *);
 static CLIENT *ip_getclient(const char *hostname, rpcprog_t prognum, rpcvers_t versnum, const char *proto);
 #endif
 
@@ -571,50 +570,6 @@ pmapdump (argc, argv)
 	  else
 	    printf ("\n");
 	}
-    }
-}
-
-static void
-get_inet_address (addr, host)
-     struct sockaddr_in *addr;
-     char *host;
-{
-  struct netconfig *nconf;
-  struct addrinfo hints, *res;
-  int error;
-
-  (void) memset ((char *) addr, 0, sizeof (*addr));
-  addr->sin_addr.s_addr = inet_addr (host);
-  if (addr->sin_addr.s_addr == -1 || addr->sin_addr.s_addr == 0)
-    {
-      if ((nconf = __rpc_getconfip ("udp")) == NULL &&
-	  (nconf = __rpc_getconfip ("tcp")) == NULL)
-	{
-	  fprintf (stderr, "rpcinfo: couldn't find a suitable transport\n");
-	  exit (1);
-	}
-      else
-	{
-	  memset (&hints, 0, sizeof hints);
-	  hints.ai_family = AF_INET;
-	  if ((error = getaddrinfo (host, "rpcbind", &hints, &res)) != 0 &&
-              (error = getaddrinfo (host, "portmapper", &hints, &res)) != 0)
-	    {
-	      fprintf (stderr, "rpcinfo: %s: %s\n",
-		       host, gai_strerror (error));
-	      exit (1);
-	    }
-	  else
-	    {
-	      memcpy (addr, res->ai_addr, res->ai_addrlen);
-	      freeaddrinfo (res);
-	    }
-	  (void) freenetconfigent (nconf);
-	}
-    }
-  else
-    {
-      addr->sin_family = AF_INET;
     }
 }
 
