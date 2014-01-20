@@ -412,16 +412,15 @@ ip_ping_one(client, vers)
  * version 0 calls succeeds, it tries for MAXVERS call and repeats the same.
  */
 static void
-ip_ping (portnum, trans, argc, argv)
+ip_ping (portnum, proto, argc, argv)
      u_short portnum;
-     char *trans;
+     char *proto;
      int argc;
      char **argv;
 {
   CLIENT *client;
-  int fd = RPC_ANYFD;
-  struct sockaddr_in addr;
   enum clnt_stat rpc_stat;
+  const char *hostname;
   u_long prognum, vers, minvers, maxvers;
   struct rpc_err rpcerr;
   int failure = 0;
@@ -431,8 +430,9 @@ ip_ping (portnum, trans, argc, argv)
       usage ();
       exit (1);
     }
+
+  hostname = argv[0];
   prognum = getprognum (argv[1]);
-  get_inet_address (&addr, argv[0]);
   if (argc == 2)
     {				/* Version number not known */
       /*
@@ -445,8 +445,9 @@ ip_ping (portnum, trans, argc, argv)
     {
       vers = getvers (argv[2]);
     }
-  addr.sin_port = htons (portnum);
-  client = clnt_com_create (&addr, prognum, vers, &fd, trans);
+
+  client = ip_getclient(hostname, prognum, vers, proto);
+
   rpc_stat = ip_ping_one(client, vers);
   if (argc != 2)
     {
